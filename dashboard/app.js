@@ -141,26 +141,74 @@
     return s;
   }
 
-  function detailHtml(r) {
-    if (!r) return '';
+  function waterfallHtml(r) {
     var m = D.model;
     var growthPct = ((r.growth_multiplier - 1) / m.growth_weight) * 100;
     var ratioDesc = r.comps_source === 'category'
-      ? 'median of ' + r.comps_peers + ' traded ' + esc(r.category || '') + ' protocols'
-      : 'global median — only ' + r.comps_peers + ' traded peers in ' + esc(r.category || 'this category');
+      ? 'median of ' + r.comps_peers + ' traded ' + esc(r.category || '') + ' protocols — the ladder below shows every one'
+      : 'global median — only ' + r.comps_peers + ' traded peer' + (r.comps_peers === 1 ? '' : 's') + ' in ' + esc(r.category || 'this category');
     var ageDesc = r.age_days == null
       ? 'listing date unreported — counted as ' + m.unknown_age_days + ' days'
       : 'tokenless for ' + r.age_days + ' days (listed ' + esc(r.listed_at) + ')';
+    var steps = [
+      { k: 'TVL', edge: '', v: r.tvl_usd, d: 'the protocol\u2019s own figure, from the snapshot' },
+      { k: 'Comps ratio', edge: '× ' + r.comps_ratio.toFixed(4), v: r.tvl_usd * r.comps_ratio, d: ratioDesc },
+      { k: 'Growth', edge: '× ' + r.growth_multiplier.toFixed(2), v: r.tvl_usd * r.comps_ratio * r.growth_multiplier, d: '7d TVL change ' + (r.change_7d == null ? 'unreported, counted as 0%' : r.change_7d.toFixed(1) + '%') + ' (model uses ' + growthPct.toFixed(1) + '%)' },
+      { k: 'Maturity', edge: '× ' + r.maturity_multiplier.toFixed(2), v: r.implied_value_usd, d: ageDesc + ' — the product is the board\u2019s implied value', fin: true },
+    ];
+    var lo = Infinity, hi = -Infinity;
+    steps.forEach(function (st) { var l = Math.log10(Math.max(1, st.v)); if (l < lo) lo = l; if (l > hi) hi = l; });
+    var span = (hi - lo) || 1;
+    var s = '<div class="wf">';
+    steps.forEach(function (st) {
+      var w = 5 + 95 * (Math.log10(Math.max(1, st.v)) - lo) / span;
+      s += '<div class="wf-row' + (st.fin ? ' fin' : '') + '">' +
+        '<div class="wf-lab">' + (st.edge ? '<span class="op">' + st.edge + '</span> ' : '') + st.k + '<span class="wf-d">' + st.d + '</span></div>' +
+        '<div class="wf-track"><div class="wf-bar" style="width:' + w.toFixed(1) + '%"></div></div>' +
+        '<div class="wf-val">' + money(st.v) + '</div></div>';
+    });
+    s += '</div><div class="wf-cap">The value, built in the open: bars on a log scale, each step multiplying the running value — a multiple under 1 pulls it back toward the TVL the market has already verified.</div>';
+    return s;
+  }
+
+  function peersHtml(r) {
+    var key = r.category || '(uncategorised)';
+    var peers = (D.peers && D.peers[key]) || [];
+    var entry = null;
+    D.comps.entries.forEach(function (e) { if (e.category === key) entry = e; });
+    var self = r.implied_value_usd / r.tvl_usd;
+    var items = peers.map(function (p) { return { t: 'p', v: p.mcap_tvl, p: p }; });
+    items.push({ t: 'med', v: r.comps_ratio });
+    items.push({ t: 'self', v: self });
+    items.sort(function (a, b) { return a.v - b.v; });
+    var medLabel = r.comps_source === 'category'
+      ? 'Median of the ' + peers.length + ' traded peers — the ratio this row is priced at' + (entry && entry.median != null && Math.abs(entry.median - r.comps_ratio) > 0.00005 ? ' (raw median ' + entry.median.toFixed(4) + ', clamped to the declared band)' : '')
+      : 'Global median of all ' + D.comps.global_peers + ' traded peers — the ratio this row is priced at';
+    var s = '<h3 class="steps">The peers behind the price — ' + esc(r.category || 'uncategorised') + '</h3>' +
+      '<div class="sub">' + (r.comps_source === 'category'
+        ? 'Every traded protocol in this category in the snapshot, cheapest multiple first. ' + esc(r.name) + ' is priced at their median; its own implied multiple is marked where it would land among them.'
+        : 'This category holds ' + peers.length + ' traded peer' + (peers.length === 1 ? '' : 's') + ' — fewer than the ' + D.model.comps_min_peers + ' the model requires before a median is a price rather than an anecdote — so this row is priced at the global median, marked in the ladder against whatever peers the category has.') + '</div>' +
+      '<table class="mini peers"><thead><tr><th>Protocol</th><th>Market cap</th><th>TVL</th><th>mcap/TVL</th></tr></thead><tbody>';
+    items.forEach(function (it) {
+      if (it.t === 'p') {
+        s += '<tr><td>' + esc(it.p.name) + '</td><td>' + money(it.p.mcap_usd) + '</td><td>' + money(it.p.tvl_usd) + '</td><td>' + it.p.mcap_tvl.toFixed(4) + '</td></tr>';
+      } else if (it.t === 'med') {
+        s += '<tr class="med"><td colspan="3">' + medLabel + '</td><td>' + r.comps_ratio.toFixed(4) + '</td></tr>';
+      } else {
+        s += '<tr class="self"><td colspan="3">' + esc(r.name) + ' — this protocol, at its implied value</td><td>×' + self.toFixed(4) + '</td></tr>';
+      }
+    });
+    s += '</tbody></table>';
+    return s;
+  }
+
+  function detailHtml(r) {
+    if (!r) return '';
     var s = '<section class="detail" id="detail"><div class="kicker">Protocol detail · rank ' + r.rank + (r.watchlist ? ' · on the house watchlist' : ' · below the watchlist floor') + '</div>' +
       '<h2>' + esc(r.name) + '</h2>' +
       '<div class="sub">' + esc(r.slug) + ' · ' + esc(r.category || 'uncategorised') + ' · chains: ' + esc(r.chains.join(', ')) + '</div>' +
-      '<div class="factors">' +
-      '<div class="factor"><div class="k">TVL (snapshot)</div><div class="v">' + money(r.tvl_usd) + '</div><div class="d">the protocol\u2019s own figure</div></div>' +
-      '<div class="factor"><div class="k"><span class="op">×</span> Comps ratio</div><div class="v">' + r.comps_ratio.toFixed(4) + '</div><div class="d">' + ratioDesc + '</div></div>' +
-      '<div class="factor"><div class="k"><span class="op">×</span> Growth</div><div class="v">' + r.growth_multiplier.toFixed(2) + '</div><div class="d">7d TVL change ' + (r.change_7d == null ? 'unreported, counted as 0%' : r.change_7d.toFixed(1) + '%') + ' (model uses ' + growthPct.toFixed(1) + '%)</div></div>' +
-      '<div class="factor"><div class="k"><span class="op">×</span> Maturity</div><div class="v">' + r.maturity_multiplier.toFixed(2) + '</div><div class="d">' + ageDesc + '</div></div>' +
-      '<div class="factor"><div class="k"><span class="op">=</span> Implied value</div><div class="v">' + money(r.implied_value_usd) + '</div><div class="d">this radar\u2019s claim, from the snapshot alone</div></div>' +
-      '</div>' +
+      waterfallHtml(r) +
+      peersHtml(r) +
       '<h3 class="steps">Farm plan — before and after a launch</h3>' +
       '<div class="sub">Farmed on ' + esc(r.chains.length ? r.chains[0] : 'its main chain') + ' — ' + esc(r.name) + '\u2019s main chain. Plans assume an Ethereum home wallet; when the farm chain differs, the plan moves the capital there first.</div><ol class="plan">';
     r.farm_steps.forEach(function (step) { s += '<li>' + esc(step) + '</li>'; });
