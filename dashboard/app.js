@@ -1,8 +1,10 @@
 // Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by main.ts from the
-// same board the entry hands in) and renders: the ranked board with sort and filters, a detail
-// view per protocol with the model's factor breakdown and the farm plan board.json carries, the
-// model itself with its constants and its comps table, the traded peers the board is priced
-// against, and the funnel that built the board. No network: every byte shown is in data.js.
+// same board the entry hands in) and renders: the macro synthesis the program computed from the
+// board (every figure in it generated from board.json, none typed by hand), the sweep plot of
+// every ranked protocol, the ranked board with sort and filters, a detail view per protocol
+// with the model's factor breakdown and the farm plan board.json carries, the model itself with
+// its constants and its comps table, the traded peers the board is priced against, and the
+// funnel that built the board. No network: every byte shown is in data.js.
 // The location hash can preset the view (#p=<slug> opens a detail, #cat=, #chain=, #q=, #watch=1
 // preset the filters), which is how the entry's screenshots were taken of the real page.
 (function () {
@@ -216,6 +218,73 @@
     return s;
   }
 
+  function synthesisHtml() {
+    var S = D.synthesis;
+    if (!S) return '';
+    var multi = S.top.categories.filter(function (c) { return c.rows > 1; })
+      .map(function (c) { return esc(c.category) + ' (' + c.rows + ')' }).join(', ');
+    var singles = S.top.categories.filter(function (c) { return c.rows === 1; })
+      .map(function (c) { return esc(c.category); });
+    var comp = multi;
+    if (singles.length) comp += (comp ? ', and one each from ' : 'one each from ') + singles.join(', ');
+    var belowTop = S.top_n - S.top.watchlist_rows;
+    var s = '<section class="block"><h2>What the radar sees</h2>' +
+      '<p>Read as a whole, the board\u2019s <strong>' + money(S.total_implied_usd) + '</strong> of implied value is top-heavy: the top ' + S.top_n + ' protocols carry <strong>' + money(S.top.implied_usd) + '</strong> of it — <strong>' + S.top.share_pct.toFixed(1) + '%</strong> — and half of everything sits inside the first <strong>' + S.half_rank + '</strong> ranks. ' +
+      'The head is made of ' + comp + '. ' + S.top.watchlist_rows + ' of the top ' + S.top_n + ' sit on the house watchlist; the other ' + belowTop + ' climbed from below the floor. ' +
+      'The head also leans on the global median: ' + S.top.own_category_rows + ' of the top ' + S.top_n + ' are priced from their own category\u2019s traded peers, ' + S.top.global_fallback_rows + ' at the global median (\u00d7' + D.comps.global_median.toFixed(4) + ') because their categories hold too few traded peers to price from — reported here rather than hidden, and the median top-' + S.top_n + ' protocol is priced at \u00d7' + S.top.median_multiple.toFixed(4) + ' of its TVL. ' +
+      'Every figure in this section is computed from board.json by the program that wrote it; none is typed by hand.</p>' +
+      '<div class="stats">' +
+      '<div class="stat"><div class="v"><em>' + S.top.share_pct.toFixed(1) + '%</em></div><div class="k">of value in the top ' + S.top_n + '</div></div>' +
+      '<div class="stat"><div class="v">' + S.half_rank + '</div><div class="k">ranks hold half the value</div></div>' +
+      '<div class="stat"><div class="v">' + S.watchlist.share_pct.toFixed(1) + '%</div><div class="k">of value on the watchlist (' + S.watchlist.rows + ' of ' + S.rows + ' rows)</div></div>' +
+      '<div class="stat"><div class="v">' + S.categories[0].share_pct.toFixed(1) + '%</div><div class="k">' + esc(S.categories[0].category) + ' — the heaviest category</div></div>' +
+      '</div>' +
+      '<div class="catbars">';
+    S.categories.slice(0, S.categories_shown).forEach(function (c) {
+      var w = S.categories[0].share_pct > 0 ? (c.share_pct / S.categories[0].share_pct) * 100 : 0;
+      s += '<div class="catbar"><div class="cn">' + esc(c.category) + ' <span>' + c.rows + ' rows</span></div>' +
+        '<div class="track"><div class="fill" style="width:' + w.toFixed(1) + '%"></div></div>' +
+        '<div class="cv">' + money(c.implied_usd) + '</div><div class="cp">' + c.share_pct.toFixed(1) + '%</div></div>';
+    });
+    var R = S.categories_rest;
+    var rw = S.categories[0].share_pct > 0 ? (R.share_pct / S.categories[0].share_pct) * 100 : 0;
+    s += '<div class="catbar rest"><div class="cn">' + R.categories + ' more categories <span>' + R.rows + ' rows</span></div>' +
+      '<div class="track"><div class="fill" style="width:' + rw.toFixed(1) + '%"></div></div>' +
+      '<div class="cv">' + money(R.implied_usd) + '</div><div class="cp">' + R.share_pct.toFixed(1) + '%</div></div>' +
+      '</div>' +
+      '<div class="split"><div class="wlseg" style="width:' + S.watchlist.share_pct.toFixed(1) + '%">Watchlist · ' + S.watchlist.rows + ' protocols · ' + money(S.watchlist.implied_usd) + ' · ' + S.watchlist.share_pct.toFixed(1) + '%</div>' +
+      '<div class="bfseg" style="width:' + S.below_floor.share_pct.toFixed(1) + '%">Below the floor · ' + S.below_floor.rows + ' protocols · ' + money(S.below_floor.implied_usd) + ' · ' + S.below_floor.share_pct.toFixed(1) + '%</div></div>' +
+      '<div class="split-cap">The house watchlist is the board\u2019s floor, not its ceiling: ' + S.below_floor.rows + ' further protocols earn their ranks below it, and carry ' + S.below_floor.share_pct.toFixed(1) + '% of the value between them.</div>' +
+      '</section>';
+    return s;
+  }
+
+  var SWEEP_PALETTE = ['#3ddc97', '#58a6ff', '#f778ba', '#bc8cff', '#39c5cf', '#ffa657', '#a5d6a7', '#ff7b72', '#79b8ff', '#d2a8ff', '#7ee0e0', '#e3b341'];
+  function sweepHtml() {
+    var rows = D.rows;
+    if (!rows.length) return '';
+    var W = 1136, H = 128, X0 = 8, X1 = W - 8, AXIS = 100;
+    var max = rows[0].implied_value_usd, min = rows[rows.length - 1].implied_value_usd;
+    var lmax = Math.log10(max), lmin = Math.log10(min), span = (lmax - lmin) || 1;
+    var catIdx = {};
+    categories.forEach(function (c, i) { catIdx[c] = i; });
+    var s = '<div class="sweep"><div class="sweep-head"><span class="sweep-t">The sweep — every ranked protocol, one point</span>' +
+      '<span class="sweep-leg"><span class="ring"></span>amber ring: house watchlist · colour: category</span></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Sweep plot of every ranked protocol on a log implied-value axis">' +
+      '<line x1="' + X0 + '" y1="' + AXIS + '" x2="' + X1 + '" y2="' + AXIS + '" class="sw-axis"/>';
+    rows.forEach(function (r) {
+      var x = X0 + ((Math.log10(r.implied_value_usd) - lmin) / span) * (X1 - X0);
+      var y = 18 + ((r.rank * 37) % 58);
+      var col = r.category ? SWEEP_PALETTE[catIdx[r.category] % SWEEP_PALETTE.length] : '#54687f';
+      if (r.watchlist) s += '<circle cx="' + x.toFixed(1) + '" cy="' + y + '" r="4.4" fill="' + col + '" class="sw-wl"/>';
+      else s += '<circle cx="' + x.toFixed(1) + '" cy="' + y + '" r="2.7" fill="' + col + '" opacity="0.72"/>';
+      if (r.rank <= ((D.synthesis && D.synthesis.top_n) || 10)) s += '<text x="' + x.toFixed(1) + '" y="' + (y - 8) + '" class="sw-lab">' + r.rank + '</text>';
+    });
+    s += '<text x="' + X0 + '" y="' + (AXIS + 16) + '" class="sw-ax">' + money(min) + '</text>' +
+      '<text x="' + X1 + '" y="' + (AXIS + 16) + '" class="sw-ax end">' + money(max) + ' · implied value, log scale</text>' +
+      '</svg></div>';
+    return s;
+  }
   function modelHtml() {
     var m = D.model;
     var entries = D.comps.entries.filter(function (e) { return e.peers > 0; })
@@ -264,7 +333,7 @@
 
   function render() {
     var rows = sorted(filtered());
-    app.innerHTML = headerHtml() + controlsHtml() + '<div id="boardwrap">' + boardHtml(rows) + '</div>' +
+    app.innerHTML = headerHtml() + synthesisHtml() + controlsHtml() + sweepHtml() + '<div id="boardwrap">' + boardHtml(rows) + '</div>' +
       '<div id="detailwrap">' + detailHtml(state.selected ? bySlug[state.selected] : null) + '</div>' +
       modelHtml() + liveHtml() + funnelHtml() +
       '<footer>Source: ' + esc(D.source) + ' · Implied values are this dashboard\u2019s own model output — a claim about what a token would be worth if the protocol\u2019s record stayed as it is, not a prediction that one will be issued.</footer>';
