@@ -1,0 +1,262 @@
+// Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by main.ts from the
+// same board the entry hands in) and renders: the ranked board with sort and filters, a detail
+// view per protocol with the model's factor breakdown and the farm plan board.json carries, the
+// model itself with its constants and its comps table, the traded peers the board is priced
+// against, and the funnel that built the board. No network: every byte shown is in data.js.
+// The location hash can preset the view (#p=<slug> opens a detail, #cat=, #chain=, #q=, #watch=1
+// preset the filters), which is how the entry's screenshots were taken of the real page.
+(function () {
+  'use strict';
+  var D = window.RADAR;
+  if (!D) return;
+  var app = document.getElementById('app');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function money(n) {
+    if (n == null) return '—';
+    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+    return '$' + n;
+  }
+  function pct(n) {
+    if (n == null) return '<span class="num">—</span>';
+    var cls = n > 0 ? 'up' : n < 0 ? 'down' : '';
+    return '<span class="num ' + cls + '">' + (n > 0 ? '+' : '') + n.toFixed(1) + '%</span>';
+  }
+  function mult(n) { return '×' + Number(n).toFixed(2); }
+
+  var hash = {};
+  (location.hash || '').replace(/^#/, '').split('&').forEach(function (kv) {
+    var i = kv.indexOf('=');
+    if (i > 0) hash[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+  });
+  var state = {
+    q: hash.q || '',
+    category: hash.cat || 'all',
+    chain: hash.chain || 'all',
+    watch: hash.watch === '1',
+    sort: 'rank',
+    dir: 1,
+    selected: hash.p || null,
+  };
+
+  var categories = [];
+  var chains = [];
+  D.rows.forEach(function (r) {
+    if (r.category && categories.indexOf(r.category) < 0) categories.push(r.category);
+    r.chains.forEach(function (c) { if (chains.indexOf(c) < 0) chains.push(c); });
+  });
+  categories.sort(); chains.sort();
+  var bySlug = {};
+  D.rows.forEach(function (r) { bySlug[r.slug] = r; });
+
+  function filtered() {
+    var q = state.q.trim().toLowerCase();
+    return D.rows.filter(function (r) {
+      if (state.watch && !r.watchlist) return false;
+      if (state.category !== 'all' && r.category !== state.category) return false;
+      if (state.chain !== 'all' && r.chains.indexOf(state.chain) < 0) return false;
+      if (q && (r.name + ' ' + r.slug + ' ' + (r.category || '')).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+  var SORTS = {
+    rank: function (r) { return r.rank; },
+    name: function (r) { return r.name.toLowerCase(); },
+    category: function (r) { return (r.category || '').toLowerCase(); },
+    tvl: function (r) { return r.tvl_usd; },
+    change: function (r) { return r.change_7d == null ? -1e18 : r.change_7d; },
+    implied: function (r) { return r.implied_value_usd; },
+    mult: function (r) { return r.implied_value_usd / r.tvl_usd; },
+  };
+  function sorted(rows) {
+    var f = SORTS[state.sort] || SORTS.rank;
+    return rows.slice().sort(function (a, b) {
+      var x = f(a), y = f(b);
+      var c = typeof x === 'string' ? (x < y ? -1 : x > y ? 1 : 0) : x - y;
+      return c * state.dir || a.rank - b.rank;
+    });
+  }
+
+  function headerHtml() {
+    var f = D.funnel;
+    return '<header class="top"><div class="kicker">Token launch radar · model ' + esc(D.model_version) + '</div>' +
+      '<h1>TOKEN <span class="thin">RADAR</span></h1>' +
+      '<p class="lede">Every protocol in the sealed snapshot that <strong>records no token yet</strong>, ranked by what its token would be worth if its record stayed as it is — priced against <strong>its own traded peers</strong>, never a flat multiple. Snapshot of ' + esc(D.as_of) + '.</p>' +
+      '<div class="stats">' +
+      '<div class="stat"><div class="v">' + f.scanned + '</div><div class="k">protocols scanned</div></div>' +
+      '<div class="stat"><div class="v"><em>' + D.board_size + '</em></div><div class="k">pre-token ranked</div></div>' +
+      '<div class="stat"><div class="v">' + D.watchlist_size + '<em>/' + D.watchlist_size + '</em></div><div class="k">watchlist covered</div></div>' +
+      '<div class="stat"><div class="v">' + D.comps.global_peers + '</div><div class="k">traded peers (comps)</div></div>' +
+      '<div class="stat"><div class="v">' + money(D.rows[0].implied_value_usd) + '</div><div class="k">top implied value</div></div>' +
+      '</div>' +
+      '<div class="formula">implied value <span>=</span> TVL <span>×</span> category median mcap/TVL <span>×</span> growth <span>×</span> maturity <span>— every factor shown per protocol below</span></div>' +
+      '</header>';
+  }
+
+  function controlsHtml() {
+    function opts(list, cur, allLabel) {
+      var s = '<option value="all">' + allLabel + '</option>';
+      list.forEach(function (v) { s += '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>'; });
+      return s;
+    }
+    return '<div class="controls">' +
+      '<label>Search <input type="search" id="q" value="' + esc(state.q) + '" placeholder="protocol or slug"></label>' +
+      '<label>Category <select id="cat">' + opts(categories, state.category, 'All categories') + '</select></label>' +
+      '<label>Chain <select id="chain">' + opts(chains, state.chain, 'All chains') + '</select></label>' +
+      '<label class="toggle"><input type="checkbox" id="watch"' + (state.watch ? ' checked' : '') + '> Watchlist only</label>' +
+      '<span class="count" id="count"></span></div>';
+  }
+
+  var HEADS = [
+    ['rank', '#'], ['name', 'Protocol'], ['category', 'Category'], ['chains', 'Chains'],
+    ['tvl', 'TVL'], ['change', '7d'], ['implied', 'Implied value'], ['mult', '× TVL'],
+  ];
+  function boardHtml(rows) {
+    var s = '<table class="board"><thead><tr>';
+    HEADS.forEach(function (h) {
+      s += '<th data-sort="' + h[0] + '"' + (state.sort === h[0] ? ' class="sorted"' : '') + '>' + h[1] +
+        (state.sort === h[0] ? (state.dir === 1 ? ' ↑' : ' ↓') : '') + '</th>';
+    });
+    s += '</tr></thead><tbody>';
+    rows.slice(0, 80).forEach(function (r) {
+      s += '<tr data-slug="' + esc(r.slug) + '"' + (state.selected === r.slug ? ' class="sel"' : '') + '>' +
+        '<td class="rank">' + r.rank + '</td>' +
+        '<td class="name"><span class="n">' + esc(r.name) + '</span>' + (r.watchlist ? '<span class="wl">WATCHLIST</span>' : '') +
+        '<span class="s">' + esc(r.slug) + '</span></td>' +
+        '<td class="cat">' + esc(r.category || '—') + '</td>' +
+        '<td class="chains">' + esc(r.chains.slice(0, 2).join(' · ')) + (r.chains.length > 2 ? ' +' + (r.chains.length - 2) : '') + '</td>' +
+        '<td class="num">' + money(r.tvl_usd) + '</td>' +
+        '<td>' + pct(r.change_7d) + '</td>' +
+        '<td class="implied">' + money(r.implied_value_usd) + '</td>' +
+        '<td class="mult">' + mult(r.implied_value_usd / r.tvl_usd) + '</td></tr>';
+    });
+    s += '</tbody></table>';
+    if (rows.length > 80) s += '<div class="more">Showing the first 80 of ' + rows.length + ' ranked protocols — filter to narrow the board; the full board is in board.json.</div>';
+    return s;
+  }
+
+  function detailHtml(r) {
+    if (!r) return '';
+    var m = D.model;
+    var growthPct = ((r.growth_multiplier - 1) / m.growth_weight) * 100;
+    var ratioDesc = r.comps_source === 'category'
+      ? 'median of ' + r.comps_peers + ' traded ' + esc(r.category || '') + ' protocols'
+      : 'global median — only ' + r.comps_peers + ' traded peers in ' + esc(r.category || 'this category');
+    var ageDesc = r.age_days == null
+      ? 'listing date unreported — counted as ' + m.unknown_age_days + ' days'
+      : 'tokenless for ' + r.age_days + ' days (listed ' + esc(r.listed_at) + ')';
+    var s = '<section class="detail" id="detail"><div class="kicker">Protocol detail · rank ' + r.rank + (r.watchlist ? ' · on the house watchlist' : ' · below the watchlist floor') + '</div>' +
+      '<h2>' + esc(r.name) + '</h2>' +
+      '<div class="sub">' + esc(r.slug) + ' · ' + esc(r.category || 'uncategorised') + ' · chains: ' + esc(r.chains.join(', ')) + '</div>' +
+      '<div class="factors">' +
+      '<div class="factor"><div class="k">TVL (snapshot)</div><div class="v">' + money(r.tvl_usd) + '</div><div class="d">the protocol\u2019s own figure</div></div>' +
+      '<div class="factor"><div class="k"><span class="op">×</span> Comps ratio</div><div class="v">' + r.comps_ratio.toFixed(4) + '</div><div class="d">' + ratioDesc + '</div></div>' +
+      '<div class="factor"><div class="k"><span class="op">×</span> Growth</div><div class="v">' + r.growth_multiplier.toFixed(2) + '</div><div class="d">7d TVL change ' + (r.change_7d == null ? 'unreported, counted as 0%' : r.change_7d.toFixed(1) + '%') + ' (model uses ' + growthPct.toFixed(1) + '%)</div></div>' +
+      '<div class="factor"><div class="k"><span class="op">×</span> Maturity</div><div class="v">' + r.maturity_multiplier.toFixed(2) + '</div><div class="d">' + ageDesc + '</div></div>' +
+      '<div class="factor"><div class="k"><span class="op">=</span> Implied value</div><div class="v">' + money(r.implied_value_usd) + '</div><div class="d">this radar\u2019s claim, from the snapshot alone</div></div>' +
+      '</div>' +
+      '<h3 class="steps">Farm plan — before and after a launch</h3><ol class="plan">';
+    r.farm_steps.forEach(function (step) { s += '<li>' + esc(step) + '</li>'; });
+    s += '</ol></section>';
+    return s;
+  }
+
+  function modelHtml() {
+    var m = D.model;
+    var entries = D.comps.entries.filter(function (e) { return e.peers > 0; })
+      .sort(function (a, b) { return b.peers - a.peers || (a.category < b.category ? -1 : 1); });
+    var s = '<section class="block"><h2>How this radar values</h2>' +
+      '<p>The model prices a protocol that has no token against <strong>the protocols in its own category whose tokens already trade</strong>. ' +
+      'For each category it takes the <strong>median market-cap / TVL multiple</strong> of those traded peers — the market\u2019s own answer to what a dollar of TVL in that business is worth — then adjusts for the protocol\u2019s <strong>seven-day TVL growth</strong> and for <strong>how long it has run with no token</strong>. ' +
+      'One function prices every row; no protocol name is special-cased, and no figure comes from outside the snapshot. A category with fewer than ' + m.comps_min_peers + ' traded peers falls back to the global median (' + D.comps.global_median.toFixed(4) + ' across ' + D.comps.global_peers + ' peers), and every ratio is clamped to [' + m.ratio_floor + ', ' + m.ratio_cap + '], the band holding the middle of the traded distribution.</p>' +
+      '<div class="consts"><span>growth weight <b>' + m.growth_weight + '</b></span><span>growth clamp <b>' + m.growth_floor + '%…+' + m.growth_cap + '%</b></span>' +
+      '<span>maturity <b>' + m.maturity_floor + '…+' + (m.maturity_floor + m.maturity_range) + ' over ' + m.maturity_days + ' days</b></span><span>unknown age <b>' + m.unknown_age_days + ' days</b></span><span>min peers <b>' + m.comps_min_peers + '</b></span></div>' +
+      '<table class="mini"><thead><tr><th>Category</th><th>Traded peers</th><th>Their median mcap/TVL</th><th>Ratio the board uses</th><th>Source</th></tr></thead><tbody>';
+    entries.forEach(function (e) {
+      s += '<tr><td>' + esc(e.category) + '</td><td>' + e.peers + '</td><td>' + (e.median == null ? '—' : e.median.toFixed(4)) + '</td><td>' + e.ratio.toFixed(4) + '</td><td>' + (e.source === 'category' ? 'own category' : 'global fallback') + '</td></tr>';
+    });
+    s += '</tbody></table></section>';
+    return s;
+  }
+
+  function liveHtml() {
+    var s = '<section class="block"><h2>Already trading — the comps, never ranked</h2>' +
+      '<p>These protocols\u2019 tokens already trade, so the board never ranks them: it shows the market\u2019s own values. They are the peer set the model above is built from — the largest ' + D.live.length + ' of ' + D.comps.global_peers + ' traded protocols with a recorded market cap.</p>' +
+      '<table class="mini"><thead><tr><th>Protocol</th><th>Category</th><th>TVL</th><th>Market cap</th><th>mcap/TVL</th><th>7d</th></tr></thead><tbody>';
+    D.live.forEach(function (r) {
+      s += '<tr><td>' + esc(r.name) + '</td><td>' + esc(r.category || '—') + '</td><td>' + money(r.tvl_usd) + '</td><td>' + money(r.mcap_usd) + '</td><td>' + (r.mcap_tvl == null ? '—' : r.mcap_tvl.toFixed(4)) + '</td><td>' + pct(r.change_7d) + '</td></tr>';
+    });
+    s += '</tbody></table></section>';
+    return s;
+  }
+
+  function funnelHtml() {
+    var f = D.funnel;
+    function step(v, k, final) {
+      return '<div class="fstep' + (final ? ' final' : '') + '"><div class="v">' + v + '</div><div class="k">' + k + '</div></div>';
+    }
+    return '<section class="block"><h2>How the board was built</h2>' +
+      '<p>Every protocol in the snapshot meets the same screens, in this order; nothing is dropped by hand.</p><div class="funnel">' +
+      step(f.scanned, 'protocols in the snapshot (TVL ≥ $5M)') + '<div class="farrow">→</div>' +
+      step('−' + f.tokened_set_aside, 'already trade a token — set aside as the comps') + '<div class="farrow">→</div>' +
+      step('−' + f.product_set_aside, 'wrapped, staked or bridged products of another protocol') + '<div class="farrow">→</div>' +
+      step('−' + f.cex_set_aside, 'exchange listings (category CEX)') + '<div class="farrow">→</div>' +
+      step('−' + f.versioned_set_aside, 'versioned pools of another protocol') + '<div class="farrow">→</div>' +
+      step(f.ranked, 'ranked on the board — all ' + D.watchlist_size + ' watchlist protocols among them', true) +
+      '</div></section>';
+  }
+
+  function render() {
+    var rows = sorted(filtered());
+    app.innerHTML = headerHtml() + controlsHtml() + '<div id="boardwrap">' + boardHtml(rows) + '</div>' +
+      '<div id="detailwrap">' + detailHtml(state.selected ? bySlug[state.selected] : null) + '</div>' +
+      modelHtml() + liveHtml() + funnelHtml() +
+      '<footer>Source: ' + esc(D.source) + ' · Implied values are this dashboard\u2019s own model output — a claim about what a token would be worth if the protocol\u2019s record stayed as it is, not a prediction that one will be issued.</footer>';
+    app.setAttribute('aria-busy', 'false');
+    document.getElementById('count').textContent = rows.length + ' of ' + D.board_size + ' protocols';
+    wire();
+  }
+  function wire() {
+    document.getElementById('q').addEventListener('input', function (e) { state.q = e.target.value; refreshBoard(); });
+    document.getElementById('cat').addEventListener('change', function (e) { state.category = e.target.value; refreshBoard(); });
+    document.getElementById('chain').addEventListener('change', function (e) { state.chain = e.target.value; refreshBoard(); });
+    document.getElementById('watch').addEventListener('change', function (e) { state.watch = e.target.checked; refreshBoard(); });
+    wireBoard();
+  }
+  function wireBoard() {
+    var wrap = document.getElementById('boardwrap');
+    wrap.querySelectorAll('th[data-sort]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var k = th.getAttribute('data-sort');
+        if (state.sort === k) state.dir = -state.dir; else { state.sort = k; state.dir = k === 'name' || k === 'category' ? 1 : -1; if (k === 'rank') state.dir = 1; }
+        refreshBoard();
+      });
+    });
+    wrap.querySelectorAll('tr[data-slug]').forEach(function (tr) {
+      tr.addEventListener('click', function () {
+        state.selected = tr.getAttribute('data-slug');
+        document.getElementById('detailwrap').innerHTML = detailHtml(bySlug[state.selected]);
+        wrap.querySelectorAll('tr').forEach(function (x) { x.classList.toggle('sel', x.getAttribute('data-slug') === state.selected); });
+        document.getElementById('detail').scrollIntoView({ block: 'start' });
+      });
+    });
+  }
+  function refreshBoard() {
+    var rows = sorted(filtered());
+    document.getElementById('boardwrap').innerHTML = boardHtml(rows);
+    document.getElementById('count').textContent = rows.length + ' of ' + D.board_size + ' protocols';
+    wireBoard();
+  }
+
+  render();
+  if (state.selected && bySlug[state.selected]) {
+    var el = document.getElementById('detail');
+    if (el) el.scrollIntoView({ block: 'start' });
+  }
+})();
