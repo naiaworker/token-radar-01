@@ -137,6 +137,14 @@ export interface CompsTable {
   entries: CompsEntry[];
 }
 
+/** One traded peer behind a category's ratio: its name and the market's own figures for it. */
+export interface CompsPeer {
+  name: string;
+  mcap_usd: number;
+  tvl_usd: number;
+  mcap_tvl: number;
+}
+
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
   text: string;
@@ -246,6 +254,7 @@ export interface RadarData {
   funnel: Funnel;
   comps: CompsTable;
   chain_test: ChainCompsTest;
+  peers: Record<string, CompsPeer[]>;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -358,6 +367,28 @@ export function compsTable(snapshot: Snapshot, model: ModelConstants = MODEL): C
     };
   });
   return { global_peers: comps.length, global_median: round4(globalMedian), global_ratio: round4(clampRatio(globalMedian)), entries };
+}
+
+/**
+ * The peers themselves, per category, for the dashboard's detail view: every traded protocol
+ * the comps table's medians are taken from (the same filter compsTable applies), each with the
+ * market's own figures, sorted by its multiple so a category reads as a ladder from the cheapest
+ * traded peer to the dearest. Stored once per category and shared by every row of that category;
+ * the board is untouched — this is the model's evidence, carried for the page to show.
+ */
+export function compsPeers(snapshot: Snapshot): Record<string, CompsPeer[]> {
+  const out: Record<string, CompsPeer[]> = {};
+  const comps = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  for (const p of comps) {
+    const key = p.category ?? '(uncategorised)';
+    const list = out[key] ?? [];
+    list.push({ name: p.name, mcap_usd: p.mcap_usd!, tvl_usd: p.tvl_usd, mcap_tvl: round4(p.mcap_usd! / p.tvl_usd) });
+    out[key] = list;
+  }
+  for (const list of Object.values(out)) {
+    list.sort((a, b) => a.mcap_tvl - b.mcap_tvl || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+  return out;
 }
 
 /** The ratio one category prices at, from a table built by compsTable. */
@@ -805,6 +836,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     funnel,
     comps: compsTable(snapshot, model),
     chain_test: chainCompsTest(snapshot, board, model),
+    peers: compsPeers(snapshot),
     rows: board.map((r) => radarRow(r, watchlist)),
     live,
   };
