@@ -1,6 +1,7 @@
 // Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by main.ts from the
 // same board the entry hands in) and renders: the macro synthesis the program computed from the
-// board (every figure in it generated from board.json, none typed by hand), the sweep plot of
+// board (every figure in it generated from board.json, none typed by hand) with a self-audit
+// panel that recomputes those figures from the rows on the page itself, the sweep plot of
 // every ranked protocol, the ranked board with sort and filters, a detail view per protocol
 // with the model's factor breakdown and the farm plan board.json carries, the model itself with
 // its constants and its comps table, the traded peers the board is priced against, and the
@@ -255,8 +256,67 @@
       '<div class="split"><div class="wlseg" style="width:' + S.watchlist.share_pct.toFixed(1) + '%">Watchlist · ' + S.watchlist.rows + ' protocols · ' + money(S.watchlist.implied_usd) + ' · ' + S.watchlist.share_pct.toFixed(1) + '%</div>' +
       '<div class="bfseg" style="width:' + S.below_floor.share_pct.toFixed(1) + '%">Below the floor · ' + S.below_floor.rows + ' protocols · ' + money(S.below_floor.implied_usd) + ' · ' + S.below_floor.share_pct.toFixed(1) + '%</div></div>' +
       '<div class="split-cap">The house watchlist is the board\u2019s floor, not its ceiling: ' + S.below_floor.rows + ' further protocols earn their ranks below it, and carry ' + S.below_floor.share_pct.toFixed(1) + '% of the value between them.</div>' +
+      auditHtml() +
       '</section>';
     return s;
+  }
+
+  // The self-audit: this page recomputes the synthesis block's headline figures from D.rows —
+  // the very rows the board below renders — and stamps how many of them reproduce. The
+  // recomputation reads nothing from D.synthesis; the synthesis object is only the claim under
+  // check, never an input. Definitions mirror the model's own: shares are parts of the board's
+  // total implied value rounded to one decimal, the head is the first top_n ranks, the half
+  // rank is the first rank whose cumulative value reaches half the total, and the median
+  // multiple is the median implied/TVL of the head, rounded to four decimals.
+  function auditHtml() {
+    var S = D.synthesis;
+    if (!S || !S.categories.length) return '';
+    var rows = D.rows.slice().sort(function (a, b) { return a.rank - b.rank; });
+    var round1 = function (n) { return Math.round(n * 10) / 10; };
+    var round4 = function (n) { return Math.round(n * 1e4) / 1e4; };
+    var total = 0;
+    rows.forEach(function (r) { total += r.implied_value_usd; });
+    var share = function (part) { return total > 0 ? round1((part / total) * 100) : 0; };
+    var top = rows.slice(0, S.top_n);
+    var topImplied = 0;
+    top.forEach(function (r) { topImplied += r.implied_value_usd; });
+    var mults = top.map(function (r) { return r.implied_value_usd / r.tvl_usd; }).sort(function (a, b) { return a - b; });
+    var mid = mults.length >> 1;
+    var medMult = mults.length % 2 === 1 ? mults[mid] : (mults[mid - 1] + mults[mid]) / 2;
+    var cum = 0, halfRank = rows.length;
+    for (var i = 0; i < rows.length; i++) {
+      cum += rows[i].implied_value_usd;
+      if (cum * 2 >= total) { halfRank = rows[i].rank; break; }
+    }
+    var wlRows = 0, wlImplied = 0;
+    var catImplied = {};
+    rows.forEach(function (r) {
+      if (r.watchlist) { wlRows++; wlImplied += r.implied_value_usd; }
+      var k = r.category || '(uncategorised)';
+      catImplied[k] = (catImplied[k] || 0) + r.implied_value_usd;
+    });
+    var heavy = null, heavyImplied = -1;
+    Object.keys(catImplied).forEach(function (k) {
+      if (catImplied[k] > heavyImplied || (catImplied[k] === heavyImplied && (heavy === null || k < heavy))) { heavy = k; heavyImplied = catImplied[k]; }
+    });
+    var checks = [
+      total === S.total_implied_usd,
+      topImplied === S.top.implied_usd,
+      share(topImplied) === S.top.share_pct,
+      round4(medMult) === S.top.median_multiple,
+      halfRank === S.half_rank,
+      wlRows === S.watchlist.rows,
+      wlImplied === S.watchlist.implied_usd,
+      share(wlImplied) === S.watchlist.share_pct,
+      heavy === S.categories[0].category,
+      share(heavyImplied) === S.categories[0].share_pct,
+    ];
+    var ok = 0;
+    checks.forEach(function (c) { if (c) ok++; });
+    return '<div class="audit' + (ok === checks.length ? '' : ' bad') + '">' +
+      '<span class="stamp">self-check: ' + ok + '/' + checks.length + ' figures recompute from the rows on this page</span>' +
+      '<span class="figs">recomputed here from the ' + rows.length + ' rows themselves, not copied from the program\u2019s synthesis: total ' + money(total) + ' of implied value · top ' + S.top_n + ' hold ' + share(topImplied).toFixed(1) + '% · half the value by rank ' + halfRank + ' · watchlist ' + share(wlImplied).toFixed(1) + '% across ' + wlRows + ' protocols · heaviest category ' + esc(heavy) + ' at ' + share(heavyImplied).toFixed(1) + '%</span>' +
+      '</div>';
   }
 
   var SWEEP_PALETTE = ['#3ddc97', '#58a6ff', '#f778ba', '#bc8cff', '#39c5cf', '#ffa657', '#a5d6a7', '#ff7b72', '#79b8ff', '#d2a8ff', '#7ee0e0', '#e3b341'];
