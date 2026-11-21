@@ -240,6 +240,43 @@ export interface ChainCompsTest {
   iqr_segmented: number;
 }
 
+/** One category's weight on the board: how many of the board's rows it holds, and how much of the board's implied value they carry. */
+export interface SynthesisCategory {
+  category: string;
+  rows: number;
+  implied_usd: number;
+  share_pct: number;
+}
+
+/**
+ * The board read as a whole: what the ranking says when its rows are read together rather than
+ * one at a time. Computed from the board itself on every build and carried in the data, so
+ * every figure the dashboard's synthesis prints is generated from the board it describes —
+ * none is written by hand — and dev/check-synthesis.mjs recomputes each one independently
+ * from board.json before a build may ship.
+ */
+export interface BoardSynthesis {
+  rows: number;
+  total_implied_usd: number;
+  total_tvl_usd: number;
+  top_n: number;
+  categories_shown: number;
+  top: {
+    implied_usd: number;
+    share_pct: number;
+    watchlist_rows: number;
+    own_category_rows: number;
+    global_fallback_rows: number;
+    median_multiple: number;
+    categories: { category: string; rows: number }[];
+  };
+  categories: SynthesisCategory[];
+  categories_rest: { categories: number; rows: number; implied_usd: number; share_pct: number };
+  watchlist: { rows: number; implied_usd: number; share_pct: number };
+  below_floor: { rows: number; implied_usd: number; share_pct: number };
+  half_rank: number;
+}
+
 /** Everything the dashboard needs: the board, the traded peers, the comps table, and the model. */
 export interface RadarData {
   as_of: string;
@@ -254,6 +291,7 @@ export interface RadarData {
   funnel: Funnel;
   comps: CompsTable;
   chain_test: ChainCompsTest;
+  synthesis: BoardSynthesis;
   peers: Record<string, CompsPeer[]>;
   rows: RadarRow[];
   live: LiveRow[];
@@ -474,6 +512,88 @@ export function chainCompsTest(snapshot: Snapshot, board: BoardRow[], model: Mod
     rows_changed: rowsChanged,
     iqr_category: weightedLogIqr([...byCategory.values()]),
     iqr_segmented: weightedLogIqr(segmentedGroups),
+  };
+}
+
+/** How many of the board's ranks the synthesis reads as its head. */
+export const SYNTH_TOP_N = 10;
+
+/** How many category lines the synthesis names before the rest are carried as one aggregate. */
+export const SYNTH_CATEGORIES_SHOWN = 8;
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+/**
+ * THE SYNTHESIS (v4). The detail view shows the model pricing one protocol; this reads the
+ * board the model produced and argues about it as a whole: how top-heavy the ranking is, what
+ * kind of protocols its head is made of, how much of it the house watchlist carries against
+ * the protocols below the floor, and where the board's value concentrates by category. Every
+ * figure is computed here, from the board itself — the dashboard's synthesis block renders
+ * these numbers and no others, so the page's argument can be checked against board.json line
+ * by line (dev/check-synthesis.mjs does exactly that, independently, before a build ships).
+ * The board is not touched: this is the board's own figures, read back to it.
+ */
+export function boardSynthesis(board: BoardRow[], watchlist: Set<string>): BoardSynthesis {
+  const total = board.reduce((s, r) => s + r.implied_value_usd, 0);
+  const share = (part: number): number => (total > 0 ? round1((part / total) * 100) : 0);
+  const top = board.slice(0, SYNTH_TOP_N);
+  const topImplied = top.reduce((s, r) => s + r.implied_value_usd, 0);
+  const topCats = new Map<string, number>();
+  for (const r of top) {
+    const key = r.category ?? '(uncategorised)';
+    topCats.set(key, (topCats.get(key) ?? 0) + 1);
+  }
+  const byCat = new Map<string, { rows: number; implied: number }>();
+  for (const r of board) {
+    const key = r.category ?? '(uncategorised)';
+    const e = byCat.get(key) ?? { rows: 0, implied: 0 };
+    e.rows++;
+    e.implied += r.implied_value_usd;
+    byCat.set(key, e);
+  }
+  const categories: SynthesisCategory[] = [...byCat.entries()]
+    .map(([category, e]) => ({ category, rows: e.rows, implied_usd: e.implied, share_pct: share(e.implied) }))
+    .sort((a, b) => b.implied_usd - a.implied_usd || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+  const rest = categories.slice(SYNTH_CATEGORIES_SHOWN);
+  const restImplied = rest.reduce((s, c) => s + c.implied_usd, 0);
+  const wlRows = board.filter((r) => watchlist.has(r.slug));
+  const wlImplied = wlRows.reduce((s, r) => s + r.implied_value_usd, 0);
+  let cum = 0;
+  let half = board.length;
+  for (const r of board) {
+    cum += r.implied_value_usd;
+    if (cum * 2 >= total) {
+      half = r.rank;
+      break;
+    }
+  }
+  return {
+    rows: board.length,
+    total_implied_usd: total,
+    total_tvl_usd: board.reduce((s, r) => s + r.tvl_usd, 0),
+    top_n: SYNTH_TOP_N,
+    categories_shown: SYNTH_CATEGORIES_SHOWN,
+    top: {
+      implied_usd: topImplied,
+      share_pct: share(topImplied),
+      watchlist_rows: top.filter((r) => watchlist.has(r.slug)).length,
+      own_category_rows: top.filter((r) => r.model.comps_source === 'category').length,
+      global_fallback_rows: top.filter((r) => r.model.comps_source === 'global').length,
+      median_multiple: round4(median(top.map((r) => r.implied_value_usd / r.tvl_usd))),
+      categories: [...topCats.entries()]
+        .map(([category, rows]) => ({ category, rows }))
+        .sort((a, b) => b.rows - a.rows || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0)),
+    },
+    categories,
+    categories_rest: {
+      categories: rest.length,
+      rows: rest.reduce((s, c) => s + c.rows, 0),
+      implied_usd: restImplied,
+      share_pct: share(restImplied),
+    },
+    watchlist: { rows: wlRows.length, implied_usd: wlImplied, share_pct: share(wlImplied) },
+    below_floor: { rows: board.length - wlRows.length, implied_usd: total - wlImplied, share_pct: share(total - wlImplied) },
+    half_rank: half,
   };
 }
 
@@ -836,6 +956,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     funnel,
     comps: compsTable(snapshot, model),
     chain_test: chainCompsTest(snapshot, board, model),
+    synthesis: boardSynthesis(board, watchlist),
     peers: compsPeers(snapshot),
     rows: board.map((r) => radarRow(r, watchlist)),
     live,
