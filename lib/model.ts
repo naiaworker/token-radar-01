@@ -31,11 +31,35 @@
 // the dashboard shows them apart, at the market's own values); wrapped, staked and bridged
 // products of another protocol, by the same screen the house applies to its watchlist — the
 // product categories (Bridge, Canonical Bridge, Liquid Staking, Liquid Restaking, Restaked BTC),
-// a name carrying the whole word wrapped, staked or staking, or a name beginning with an
-// exchange's name — because WBTC is Bitcoin on Ethereum and Binance staked ETH is ETH in a
-// staking product: neither is a protocol still waiting on a launch of its own, whatever its size;
-// exchange listings (category CEX: a listing venue is not a protocol awaiting its own token);
-// and versioned pools (a name ending in V2, 2.0 and the like is a pool of another protocol).
+// a name carrying wrapped, staked, staking, restaked or restaking anywhere in it, whole word or
+// compounded into a longer name (Valantis stHYPE Restaking is a restaking product whatever word
+// boundaries its name uses), or a name beginning with an exchange's name — because WBTC is
+// Bitcoin on Ethereum and Binance staked ETH is ETH in a staking product: neither is a protocol
+// still waiting on a launch of its own, whatever its size; exchange listings (category CEX: a
+// listing venue is not a protocol awaiting its own token); and versioned pools (a name ending
+// in V2, 2.0 and the like is a pool of another protocol).
+//
+// THE CHAIN QUESTION, TESTED (v2). A natural refinement is to price each category per chain
+// ecosystem — category x primary chain (the first chain in a protocol's record) — on the theory
+// that a chain's own traded peers price a protocol better than its category at large. The model
+// runs that test on the snapshot's own figures every build and carries the result in the data
+// (chainCompsTest below, printed on the dashboard): the snapshot's 128 traded peers scatter over
+// 85 category x chain buckets, only 10 of which hold the 3 peers this model requires before a
+// median is a price rather than an anecdote, covering 43 of the 128 peers; only 10 of the
+// board's rows sit in a supported bucket at all, and 3 would reprice. The split also fails its
+// own premise: the peer-weighted spread inside the groups (IQR of log10 multiples) is 1.048 with
+// the chain split against 1.016 without it — the buckets are no tighter than the categories.
+// And the largest repricing the split would cause, Lending on Ethereum (0.1324 to 0.6060), rests
+// on six peers whose multiples span 0.08 to 5.13. So the board prices by category, and the
+// dashboard shows the test and its numbers as part of the model's justification: chain is not a
+// pricing axis on this snapshot's figures. Where chain IS a fact — where a protocol operates,
+// what an action there costs, how capital gets there — the farm plans below are built on it.
+//
+// THE FARM PLANS (v2). Every plan farms on the protocol's main chain — the first chain in its
+// record, where its deployment and TVL sit — and says why, with that chain's fee class as the
+// cost of acting there. The plans assume a home wallet on Ethereum (HOME_CHAIN): when the farm
+// chain differs, the plan's second step moves the capital there first (a bridge where a bridge
+// exists; a native BTC funding on Bitcoin, where none does).
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -88,7 +112,10 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the board's rows carry its factors. */
-export const MODEL_VERSION = 'comps-1';
+export const MODEL_VERSION = 'comps-2';
+
+/** The home chain every farm plan assumes the reader's wallet starts on. */
+export const HOME_CHAIN = 'Ethereum';
 
 /** How many live-token protocols the dashboard's traded-peers view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -188,6 +215,23 @@ export interface Funnel {
   ranked: number;
 }
 
+/**
+ * The chain-segmentation test, computed from the snapshot on every build: what pricing each
+ * category per chain ecosystem (category x primary chain) would do to this board, measured
+ * against the category-only pricing the board actually uses. Carried in the data so the
+ * dashboard prints the test beside the model it justifies.
+ */
+export interface ChainCompsTest {
+  buckets_total: number;
+  buckets_supported: number;
+  peers_covered: number;
+  peers_total: number;
+  rows_in_supported: number;
+  rows_changed: number;
+  iqr_category: number;
+  iqr_segmented: number;
+}
+
 /** Everything the dashboard needs: the board, the traded peers, the comps table, and the model. */
 export interface RadarData {
   as_of: string;
@@ -201,6 +245,7 @@ export interface RadarData {
   live_size: number;
   funnel: Funnel;
   comps: CompsTable;
+  chain_test: ChainCompsTest;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -249,8 +294,12 @@ const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 /** The categories the house's watchlist treats as products of another protocol, not issuers. */
 const PRODUCT_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC']);
 
-/** A name carrying the whole word wrapped, staked or staking: a product of another asset. */
-const PRODUCT_NAME = /\b(wrapped|staked|staking)\b/i;
+/**
+ * A name carrying wrapped, staked, staking, restaked or restaking anywhere in it — whole word
+ * or compounded into a longer name (stHYPE Restaking, a wrapped-BTC ticker): a product of
+ * another asset, screened the same way whatever the name's word boundaries.
+ */
+const PRODUCT_NAME = /(wrapped|staked|staking|restaked|restaking)/i;
 
 /** A name beginning with an exchange's name: that exchange's product, by the house's own rule. */
 const EXCHANGE_NAME = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\b/;
@@ -315,6 +364,86 @@ export function compsTable(snapshot: Snapshot, model: ModelConstants = MODEL): C
 function ratioOf(table: CompsTable, category: string | null): CompsEntry {
   const key = category ?? '(uncategorised)';
   return table.entries.find((e) => e.category === key) ?? { category: key, peers: 0, median: null, ratio: table.global_ratio, source: 'global' };
+}
+
+/** A protocol's primary chain: the first chain in its record, where its deployment and TVL sit. */
+function primaryChain(p: SnapshotProtocol): string {
+  return p.chains.length > 0 ? p.chains[0]! : '(no chain)';
+}
+
+/** The q-quantile of a list, on a sorted copy (the same index rule the spread figures quote). */
+function quantile(values: number[], q: number): number {
+  const a = [...values].sort((x, y) => x - y);
+  return a[Math.min(a.length - 1, Math.max(0, Math.floor(q * a.length)))]!;
+}
+
+/**
+ * The peer-weighted mean IQR of log10 multiples across a set of peer groups: how widely the
+ * market's own prices scatter inside the groups a segmentation prices from. A segmentation
+ * earns its place only if its groups are tighter than the categories it splits.
+ */
+function weightedLogIqr(groups: number[][]): number {
+  let num = 0;
+  let den = 0;
+  for (const rs of groups) {
+    if (rs.length < 2) continue;
+    const logs = rs.map((x) => Math.log10(x));
+    num += (quantile(logs, 0.75) - quantile(logs, 0.25)) * rs.length;
+    den += rs.length;
+  }
+  return den > 0 ? Math.round((num / den) * 1000) / 1000 : 0;
+}
+
+/**
+ * The chain test, run on the snapshot's own figures: bucket the traded peers by category x
+ * primary chain, keep the buckets that hold at least COMPS_MIN_PEERS peers (the same line the
+ * category table applies to itself), and measure what pricing from them would change on this
+ * board. On this snapshot the answer is: almost nothing, on buckets no tighter than the
+ * categories — which is why the board prices by category and shows this test instead.
+ */
+export function chainCompsTest(snapshot: Snapshot, board: BoardRow[], model: ModelConstants = MODEL): ChainCompsTest {
+  const clampRatio = (r: number): number => Math.min(model.ratio_cap, Math.max(model.ratio_floor, r));
+  const comps = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const catKey = (p: SnapshotProtocol): string => p.category ?? '(uncategorised)';
+  const byCategory = new Map<string, number[]>();
+  const byBucket = new Map<string, SnapshotProtocol[]>();
+  for (const p of comps) {
+    const ratios = byCategory.get(catKey(p)) ?? [];
+    ratios.push(p.mcap_usd! / p.tvl_usd);
+    byCategory.set(catKey(p), ratios);
+    const bucket = byBucket.get(`${catKey(p)} @ ${primaryChain(p)}`) ?? [];
+    bucket.push(p);
+    byBucket.set(`${catKey(p)} @ ${primaryChain(p)}`, bucket);
+  }
+  const supported = [...byBucket.values()].filter((v) => v.length >= model.comps_min_peers);
+  const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+  let rowsInSupported = 0;
+  let rowsChanged = 0;
+  for (const row of board) {
+    const p = index.get(row.slug);
+    if (p === undefined) continue;
+    const bucket = byBucket.get(`${catKey(p)} @ ${primaryChain(p)}`) ?? [];
+    if (bucket.length < model.comps_min_peers) continue;
+    rowsInSupported++;
+    const segRatio = round4(clampRatio(median(bucket.map((q) => q.mcap_usd! / q.tvl_usd))));
+    if (segRatio !== row.model.comps_ratio) rowsChanged++;
+  }
+  const segmentedGroups = comps.map((p) => {
+    const bucket = byBucket.get(`${catKey(p)} @ ${primaryChain(p)}`) ?? [];
+    return bucket.length >= model.comps_min_peers
+      ? bucket.map((q) => q.mcap_usd! / q.tvl_usd)
+      : (byCategory.get(catKey(p)) ?? comps.map((q) => q.mcap_usd! / q.tvl_usd));
+  });
+  return {
+    buckets_total: byBucket.size,
+    buckets_supported: supported.length,
+    peers_covered: supported.reduce((s, v) => s + v.length, 0),
+    peers_total: comps.length,
+    rows_in_supported: rowsInSupported,
+    rows_changed: rowsChanged,
+    iqr_category: weightedLogIqr([...byCategory.values()]),
+    iqr_segmented: weightedLogIqr(segmentedGroups),
+  };
 }
 
 /** Every factor of one protocol's implied value, and the value itself. */
@@ -531,10 +660,16 @@ function familyActions(family: FarmFamily, p: SnapshotProtocol, chain: string, c
 }
 
 /**
- * A protocol's farm plan: five steps, each an action with a cost and a time, generated from the
- * protocol's own record — its category's playbook, its own chains and their fee classes, capital
- * sized to its TVL, and a cadence set by its age. The same function writes board.json's steps and
- * the dashboard's, so the page and the board can never disagree.
+ * A protocol's farm plan: each step an action with a cost and a time, generated from the
+ * protocol's own record — its category's playbook, capital sized to its TVL, a cadence set by
+ * its age, and its chain taken seriously. The plan farms on the protocol's main chain (the
+ * first chain in its record, where its deployment and TVL sit) and says so, with that chain's
+ * fee class as the cost of acting there: on Ethereum that means mainnet gas on every action,
+ * so the plan batches; on a low-fee chain the weekly cadence is nearly free. The plans assume
+ * the reader's home wallet sits on HOME_CHAIN, so when the farm chain differs, the second step
+ * moves the capital there first — a bridge where a bridge exists, a native BTC funding on
+ * Bitcoin, where none does. The same function writes board.json's steps and the dashboard's,
+ * so the page and the board can never disagree.
  */
 export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   const chain = chainOf(p);
@@ -551,19 +686,50 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
           time: '15 minutes',
         }
       : { text: secondAction, cost: `${cost.perTx} on top of the position`, time: '15 minutes' };
+  const setup: FarmStep =
+    chain === HOME_CHAIN
+      ? {
+          text: `Fund a fresh wallet on ${chain} with the position capital plus fee headroom, and keep its seed phrase offline. Farm on ${chain} because it is ${p.name}'s main chain — the first chain in its record, where its deployment and TVL sit — which means every action pays mainnet gas, so this plan batches actions instead of spreading them thin. ${p.name} counts activity per wallet, so farm from one wallet you control end to end.`,
+          cost: `${cost.perTx} for the first transaction`,
+          time: '10 minutes',
+        }
+      : {
+          text: `Fund a fresh wallet for ${chain} and keep its seed phrase offline. Farm on ${chain} because it is ${p.name}'s main chain — the first chain in its record, where its deployment and TVL sit — and an action there costs ${cost.perTx} instead of ${HOME_CHAIN} mainnet gas. ${p.name} counts activity per wallet, so farm from one wallet you control end to end.`,
+          cost: `${cost.perTx} for the first transaction`,
+          time: '10 minutes',
+        };
+  const move: FarmStep | null =
+    chain === HOME_CHAIN
+      ? null
+      : chain === 'Bitcoin'
+        ? {
+            text: `Fund the position in BTC: withdraw BTC from an exchange straight to the farm wallet. No bridge carries a stablecoin position onto Bitcoin, so the capital moves as BTC itself and the wallet starts native on the chain ${p.name} operates on.`,
+            cost: 'an exchange withdrawal fee, in the $1–$5 network-fee class',
+            time: '30 minutes for the withdrawal to confirm',
+          }
+        : {
+            text: `Bridge $${capital} of USDC from ${HOME_CHAIN} — the home chain these plans assume — to ${chain} through the bridge ${chain}'s own ecosystem publishes for inbound funds, and wait for the funds to land before touching the app: ${p.name} counts activity where it operates, and that is ${chain}, not the home chain.`,
+            cost: `${HOME_CHAIN} gas on the send plus a small bridge fee`,
+            time: '15–30 minutes for the funds to land',
+          };
+  const cadence: FarmStep =
+    chain === HOME_CHAIN
+      ? {
+          text: `Repeat one qualifying action on ${p.name} every week for ${weeks} weeks (a deposit, a swap, a borrow or a claim, whichever its app counts), so the wallet appears in ${weeks} separate weekly snapshots instead of one; on ${chain} each touch pays mainnet gas, so fold the week's actions into a single visit.`,
+          cost: `${cost.perTx} a week, about ${weeks} transactions in all`,
+          time: '5 minutes a week',
+        }
+      : {
+          text: `Repeat one qualifying action on ${p.name} every week for ${weeks} weeks (a deposit, a swap, a borrow or a claim, whichever its app counts), so the wallet appears in ${weeks} separate weekly snapshots instead of one; at ${cost.perTx} a touch on ${chain}, the weekly cadence costs next to nothing next to the position.`,
+          cost: `${cost.perTx} a week, about ${weeks} transactions in all`,
+          time: '5 minutes a week',
+        };
   return [
-    {
-      text: `Fund a fresh wallet on ${chain} with the position capital plus fee headroom, and keep its seed phrase offline; ${p.name} counts activity per wallet, so farm from one wallet you control end to end.`,
-      cost: `${cost.perTx} for the first transaction`,
-      time: '10 minutes',
-    },
+    setup,
+    ...(move !== null ? [move] : []),
     { text: core, cost: `$${capital} of capital and ${cost.perTx} per transaction`, time: '15 minutes to set up' },
     breadth,
-    {
-      text: `Repeat one qualifying action on ${p.name} every week for ${weeks} weeks (a deposit, a swap, a borrow or a claim, whichever its app counts), so the wallet appears in ${weeks} separate weekly snapshots instead of one.`,
-      cost: `${cost.perTx} a week, about ${weeks} transactions in all`,
-      time: '5 minutes a week',
-    },
+    cadence,
     {
       text: `Before withdrawing anything, open ${p.name}'s own points or rewards page and claim only from the link the protocol itself publishes; then write the wallet, dates and transaction hashes into a farm log so the position can be repeated or unwound.`,
       cost: 'nothing to check, and never pay a third party to claim',
@@ -638,6 +804,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_size: live.length,
     funnel,
     comps: compsTable(snapshot, model),
+    chain_test: chainCompsTest(snapshot, board, model),
     rows: board.map((r) => radarRow(r, watchlist)),
     live,
   };
