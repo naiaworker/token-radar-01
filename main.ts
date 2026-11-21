@@ -91,7 +91,7 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 
 process.stdout.write(
   `token radar: ${radar.funnel.scanned} protocols scanned, ${radar.funnel.tokened_set_aside} tokened set aside as comps, ` +
-    `${radar.funnel.product_set_aside} wrapped/staked/bridged products, ${radar.funnel.cex_set_aside} exchange listings and ` +
+    `${radar.funnel.product_set_aside} wrapped/staked/restaking products, ${radar.funnel.cex_set_aside} exchange listings and ` +
     `${radar.funnel.versioned_set_aside} versioned pools set aside, ${board.length} rows ranked ` +
     `(all ${snapshot.watchlist.length} watchlist slugs covered, ${radar.early_size} below the floor)\n` +
     `token radar: comps from ${radar.comps.global_peers} traded protocols, global median mcap/TVL ${radar.comps.global_median}; wrote ${join(out, 'board.json')}, ` +
