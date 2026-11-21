@@ -90,13 +90,19 @@ td.mult { font-family: var(--mono); color: var(--muted); }
 section.detail { margin-top: 18px; border: 1px solid var(--signal-dim); background: linear-gradient(180deg, var(--panel-2), var(--panel)); border-radius: 10px; padding: 22px 26px; }
 section.detail h2 { margin: 0 0 2px; font-size: 26px; }
 section.detail .sub { color: var(--muted); font-family: var(--mono); font-size: 13px; }
-.factors { display: flex; flex-wrap: wrap; gap: 0; margin: 18px 0 6px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.factor { flex: 1 1 150px; padding: 12px 14px; border-right: 1px solid var(--line-soft); background: rgba(5, 8, 13, 0.5); }
-.factor:last-child { border-right: none; background: rgba(61, 220, 151, 0.08); }
-.factor .k { font-size: 10.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--faint); }
-.factor .v { font-family: var(--mono); font-size: 19px; margin-top: 2px; }
-.factor .d { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.factor .op { color: var(--signal); font-family: var(--mono); }
+.wf { margin: 18px 0 4px; border: 1px solid var(--line); border-radius: 8px; background: rgba(5, 8, 13, 0.5); padding: 12px 14px; }
+.wf-row { display: grid; grid-template-columns: 290px 1fr 110px; gap: 12px; align-items: center; padding: 5px 0; }
+.wf-lab { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.wf-lab .op { color: var(--signal); font-family: var(--mono); letter-spacing: 0; }
+.wf-lab .wf-d { display: block; text-transform: none; letter-spacing: 0; color: var(--faint); font-size: 12px; margin-top: 1px; }
+.wf-track { height: 16px; background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 4px; overflow: hidden; }
+.wf-bar { height: 100%; background: linear-gradient(90deg, var(--signal-dim), var(--signal)); opacity: 0.7; }
+.wf-row.fin .wf-bar { opacity: 1; }
+.wf-val { font-family: var(--mono); font-size: 15px; text-align: right; }
+.wf-row.fin .wf-val { color: var(--signal); font-weight: 700; }
+.wf-cap { font-size: 12px; color: var(--faint); margin: 2px 0 2px; }
+table.peers tr.med td { color: var(--signal); font-family: var(--sans); border-top: 1px solid var(--signal-dim); border-bottom: 1px solid var(--signal-dim); }
+table.peers tr.self td { color: var(--amber); font-family: var(--sans); font-weight: 650; }
 h3.steps { margin: 18px 0 8px; font-size: 13px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--signal); }
 ol.plan { margin: 0; padding-left: 22px; }
 ol.plan li { margin: 0 0 9px; color: var(--text); }
