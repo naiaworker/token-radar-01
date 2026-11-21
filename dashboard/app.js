@@ -161,7 +161,8 @@
       '<div class="factor"><div class="k"><span class="op">×</span> Maturity</div><div class="v">' + r.maturity_multiplier.toFixed(2) + '</div><div class="d">' + ageDesc + '</div></div>' +
       '<div class="factor"><div class="k"><span class="op">=</span> Implied value</div><div class="v">' + money(r.implied_value_usd) + '</div><div class="d">this radar\u2019s claim, from the snapshot alone</div></div>' +
       '</div>' +
-      '<h3 class="steps">Farm plan — before and after a launch</h3><ol class="plan">';
+      '<h3 class="steps">Farm plan — before and after a launch</h3>' +
+      '<div class="sub">Farmed on ' + esc(r.chains.length ? r.chains[0] : 'its main chain') + ' — ' + esc(r.name) + '\u2019s main chain. Plans assume an Ethereum home wallet; when the farm chain differs, the plan moves the capital there first.</div><ol class="plan">';
     r.farm_steps.forEach(function (step) { s += '<li>' + esc(step) + '</li>'; });
     s += '</ol></section>';
     return s;
@@ -175,6 +176,7 @@
       '<p>The model prices a protocol that has no token against <strong>the protocols in its own category whose tokens already trade</strong>. ' +
       'For each category it takes the <strong>median market-cap / TVL multiple</strong> of those traded peers — the market\u2019s own answer to what a dollar of TVL in that business is worth — then adjusts for the protocol\u2019s <strong>seven-day TVL growth</strong> and for <strong>how long it has run with no token</strong>. ' +
       'One function prices every row; no protocol name is special-cased, and no figure comes from outside the snapshot. A category with fewer than ' + m.comps_min_peers + ' traded peers falls back to the global median (' + D.comps.global_median.toFixed(4) + ' across ' + D.comps.global_peers + ' peers), and every ratio is clamped to [' + m.ratio_floor + ', ' + m.ratio_cap + '], the band holding the middle of the traded distribution.</p>' +
+      '<p><strong>Why not per chain?</strong> This build tested pricing each category per chain ecosystem — category × a protocol\u2019s main chain — and the snapshot\u2019s own figures reject it. The ' + D.chain_test.peers_total + ' traded peers scatter over ' + D.chain_test.buckets_total + ' category × chain buckets; only ' + D.chain_test.buckets_supported + ' buckets hold the ' + m.comps_min_peers + ' peers this model requires before a median is a price rather than an anecdote, covering ' + D.chain_test.peers_covered + ' of the ' + D.chain_test.peers_total + ' peers. Just ' + D.chain_test.rows_in_supported + ' of the board\u2019s rows sit in a supported bucket at all, and ' + D.chain_test.rows_changed + ' would reprice — the largest of them, Lending on Ethereum (0.1324 → 0.6060), on six peers whose multiples span 0.08 to 5.13. The split also fails its own premise: the spread inside the groups (peer-weighted IQR of log multiples) is ' + D.chain_test.iqr_segmented.toFixed(3) + ' with the chain split against ' + D.chain_test.iqr_category.toFixed(3) + ' without it — the buckets are no tighter than the categories. So the board prices by category, and chain enters where chain is a fact rather than a hope: every farm plan below farms on its protocol\u2019s main chain, names what acting there costs, and moves the capital there first when it differs from the Ethereum home chain the plans assume.</p>' +
       '<div class="consts"><span>growth weight <b>' + m.growth_weight + '</b></span><span>growth clamp <b>' + m.growth_floor + '%…+' + m.growth_cap + '%</b></span>' +
       '<span>maturity <b>' + m.maturity_floor + '…+' + (m.maturity_floor + m.maturity_range) + ' over ' + m.maturity_days + ' days</b></span><span>unknown age <b>' + m.unknown_age_days + ' days</b></span><span>min peers <b>' + m.comps_min_peers + '</b></span></div>' +
       '<table class="mini"><thead><tr><th>Category</th><th>Traded peers</th><th>Their median mcap/TVL</th><th>Ratio the board uses</th><th>Source</th></tr></thead><tbody>';
@@ -205,7 +207,7 @@
       '<p>Every protocol in the snapshot meets the same screens, in this order; nothing is dropped by hand.</p><div class="funnel">' +
       step(f.scanned, 'protocols in the snapshot (TVL ≥ $5M)') + '<div class="farrow">→</div>' +
       step('−' + f.tokened_set_aside, 'already trade a token — set aside as the comps') + '<div class="farrow">→</div>' +
-      step('−' + f.product_set_aside, 'wrapped, staked or bridged products of another protocol') + '<div class="farrow">→</div>' +
+      step('−' + f.product_set_aside, 'wrapped, staked, restaking or bridged products of another protocol') + '<div class="farrow">→</div>' +
       step('−' + f.cex_set_aside, 'exchange listings (category CEX)') + '<div class="farrow">→</div>' +
       step('−' + f.versioned_set_aside, 'versioned pools of another protocol') + '<div class="farrow">→</div>' +
       step(f.ranked, 'ranked on the board — all ' + D.watchlist_size + ' watchlist protocols among them', true) +
